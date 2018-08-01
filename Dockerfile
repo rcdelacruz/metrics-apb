@@ -47,6 +47,6 @@ COPY playbooks /opt/apb/project
 COPY playbooks /opt/ansible/playbooks
 COPY roles /opt/ansible/roles
 COPY vars /opt/ansible/vars
-RUN ansible-galaxy install -r /opt/ansible/playbooks/requirements.yml -p /opt/ansible/roles/
+RUN ansible-galaxy install -r /opt/ansible/playbooks/requirements.yml -p /opt/ansible/roles/provision-keycloak-apb/files
 RUN chmod -R g=u /opt/{ansible,apb}
 USER apb
