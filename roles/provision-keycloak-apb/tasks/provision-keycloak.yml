@@ -1,0 +1,156 @@
+- name: create persistent volume claim to copy the SPI provider
+  k8s_v1_persistent_volume_claim:
+    name: '{{ keycloak_pv_claim_name }}'
+    state: present
+    namespace: '{{ namespace }}'
+    access_modes:
+      - ReadWriteOnce
+    spec_resources_requests:
+      storage: 10M
+  register: create_volume_claim
+
+- name: create keycloak k8s deployment
+  k8s_extensions_v1beta1_deployment:
+    name: keycloak
+    namespace: '{{ namespace }}'
+    labels:
+      app: keycloak
+      service: '{{ keycloak_service_name }}'
+    replicas: 1
+    spec_template_metadata_labels:
+      app: keycloak
+      name: '{{ keycloak_service_name }}'
+    volumes:
+    - name: keycloak-metrics
+      persistent_volume_claim:
+        claim_name: keycloak-metrics
+    containers:
+    - env:
+      - name: KEYCLOAK_USER
+        value: '{{ ADMIN_USERNAME }}'
+      - name: KEYCLOAK_PASSWORD
+        value: '{{ ADMIN_PASSWORD }}'
+      - name: PROXY_ADDRESS_FORWARDING
+        value: 'true'
+      - name: POSTGRES_USER
+        value_from:
+          secret_key_ref:
+            name: '{{ postgres_secret_name }}'
+            key: database-user
+      - name: POSTGRES_PASSWORD
+        value_from:
+          secret_key_ref:
+            name: '{{ postgres_secret_name }}'
+            key: database-password
+      - name: POSTGRES_DATABASE
+        value_from:
+          secret_key_ref:
+            name: '{{ postgres_secret_name }}'
+            key: database-name
+      image: 'docker.io/jboss/keycloak-openshift:{{ keycloak_image_tag }}'
+      name: keycloak
+      ports:
+      - container_port: 8080
+        protocol: TCP
+      volume_mounts:
+      - mount_path: /opt/jboss/keycloak/providers/
+        name: keycloak-metrics
+        sub_path: providers/
+
+- name: create keycloak service
+  k8s_v1_service:
+    name: '{{ keycloak_service_name }}'
+    namespace: '{{ namespace }}'
+    annotations:
+      # this only works with the custom JAR (SPI impl) https://github.com/aerogear/keycloak-metrics-spi
+      org.aerogear.metrics/plain_endpoint:  /auth/realms/master/metrics
+    selector:
+      name: '{{ keycloak_service_name }}'
+    ports:
+    - name: web
+      port: 80
+      target_port: 8080
+
+- name: create keycloak http route
+  openshift_v1_route:
+    name: '{{ keycloak_route_name }}'
+    namespace: '{{ namespace }}'
+    labels:
+      app: keycloak
+      service: '{{ keycloak_service_name }}'
+      mobile: enabled
+    to_name: '{{ keycloak_service_name }}'
+    spec_port_target_port: web
+  when: keycloak_protocol == 'http'
+
+- name: create keycloak https route
+  openshift_v1_route:
+    name: '{{ keycloak_route_name }}'
+    namespace: '{{ namespace }}'
+    labels:
+      app: keycloak
+      service: '{{ keycloak_service_name }}'
+      mobile: enabled
+    tls_termination: edge
+    tls_insecure_edge_termination_policy: Redirect
+    to_name: '{{ keycloak_service_name }}'
+    spec_port_target_port: web
+  when: keycloak_protocol == 'https'
+
+- name: "Retrieve route to keycloak"
+  shell: "oc get routes/{{ keycloak_route_name }} -n '{{ namespace }}' -o jsonpath='{.spec.host}'"
+  register: keycloak_route
+
+- name: "Copy keycloak-metrics-spi jar into temp directory"
+  copy:
+    src: keycloak-metrics-spi-1.0-SNAPSHOT.jar
+    dest: /tmp/keycloak-metrics-spi-1.0-SNAPSHOT.jar
+
+- name: Get the name of the keycloak pod
+  shell: oc get pods -n '{{ namespace }}' -o jsonpath='{.items[?(@.spec.containers[0].name=="keycloak")].metadata.name}'
+  register: keycloak_pod_name
+  retries: 10
+  until: '"keycloak" in keycloak_pod_name.stdout'
+  delay: 5
+
+- name: Copy jar into keycloaks metrics
+  shell: oc cp /tmp/keycloak-metrics-spi-1.0-SNAPSHOT.jar {{ namespace }}/{{ keycloak_pod_name.stdout }}:/opt/jboss/keycloak/providers/
+  register: copy_jar
+  retries: 60
+  until: copy_jar.rc == 0
+  delay: 5
+
+- name: "Create keycloak secret template"
+  template:
+    src: secret.yml.j2
+    dest: /tmp/secret.yaml
+
+- name: "Create keycloak secret"
+  shell: "oc create -f /tmp/secret.yaml -n {{ namespace }}"
+
+- name: "Delete secret template file"
+  file: path=/tmp/secret.yaml state=absent
+
+- name: Encode APB provision credentials
+  asb_encode_binding:
+    fields:
+      USERID: "{{ ADMIN_USERNAME }}"
+      USERNAME: "{{ ADMIN_USERNAME }}"
+      PASSWORD: "{{ ADMIN_PASSWORD }}"
+      LOGIN_REALM: "{{ keycloak_admin_realm_name }}"
+      REALM: "{{ KEYCLOAK_REALM }}"
+      URI: "{{ KEYCLOAK_HOST }}"
+  when: encode_asb_binding
+
+- name: Populate APB provision credentials
+  set_fact:
+    _apb_provision_creds: "{{ _apb_provision_creds|default({}) | combine( {item.name: item.value} ) }}"
+  with_items:
+    - {name: USERID, value: "{{ ADMIN_USERNAME }}"}
+    - {name: USERNAME, value: "{{ ADMIN_USERNAME }}"}
+    - {name: PASSWORD, value: "{{ ADMIN_PASSWORD }}"}
+    - {name: LOGIN_REALM, value: "{{ keycloak_admin_realm_name }}"}
+    - {name: REALM, value: "{{ KEYCLOAK_REALM }}"}
+    - {name: URI, value: "{{ KEYCLOAK_HOST }}"}
+  when: not encode_asb_binding
+  no_log: yes

@@ -1,0 +1,60 @@
+- name: Delete all metrics resources by app label (limited to deploymentconfig,buildconfig,service,imagestream,route and pod)
+  shell: oc delete all -l app=metrics -n '{{ namespace }}'
+
+- k8s_v1_secret:
+    name: '{{ prometheus_secret_name }}'
+    namespace: '{{ namespace }}'
+    state: absent
+
+- k8s_v1_config_map:
+    name: '{{ prometheus_configmap_name }}'
+    namespace: '{{ namespace }}'
+    state: absent
+
+- k8s_v1_config_map:
+    name: '{{ grafana_ini_configmap_name }}'
+    namespace: '{{ namespace }}'
+    state: absent
+
+- k8s_v1_config_map:
+    name: '{{ grafana_datasources_configmap_name }}'
+    namespace: '{{ namespace }}'
+    state: absent
+
+- k8s_v1_config_map:
+    name: '{{ grafana_dashboards_configmap_name }}'
+    namespace: '{{ namespace }}'
+    state: absent
+
+- k8s_v1_config_map:
+    name: grafana-dashboards-providers-configmap
+    namespace: '{{ namespace }}'
+    state: absent
+
+- k8s_v1_config_map:
+    name: metrics
+    namespace: '{{ namespace }}'
+    state: absent
+
+- k8s_v1_service_account:
+    name: '{{ proxy_serviceaccount_name }}'
+    namespace: '{{ namespace }}'
+    state: absent
+
+- name: Prometheus PVC
+  k8s_v1_persistent_volume_claim:
+    name: '{{ prometheus_claim_name}}'
+    namespace: "{{ namespace }}"
+    state: absent
+
+- name: Grafana PVC
+  k8s_v1_persistent_volume_claim:
+    name: '{{ grafana_claim_name}}'
+    namespace: "{{ namespace }}"
+    state: absent
+
+- name: Postgres PVC
+  k8s_v1_persistent_volume_claim:
+    name: '{{ postgres_claim_name}}'
+    namespace: "{{ namespace }}"
+    state: absent
